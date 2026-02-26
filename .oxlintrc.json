@@ -1,0 +1,12 @@
+{
+  "rules": {
+    "eqeqeq": "error",
+    "no-unused-vars": "error",
+    "no-console": "off",
+    "prefer-const": "warn"
+  },
+  "env": {
+    "node": true,
+    "es2022": true
+  }
+}
