@@ -9,8 +9,6 @@
     "dev": "dotenv -e .env -- tsx watch src/index.ts",
     "start": "dotenv -e .env -- node dist/index.js",
     "lint": "oxlint src",
-    "fmt": "oxc format src",
-    "fmt:check": "oxc format --check src",
     "typecheck": "tsc --noEmit",
     "build:container": "docker build --platform linux/arm64 -t gurt-sandbox:latest -f docker/Dockerfile .",
     "deploy:personal": "agentcore launch --local-build",
@@ -18,21 +16,16 @@
     "test": "vitest"
   },
   "dependencies": {
-    "@opencode-ai/sdk": "^1.0.0",
-    "@aws-sdk/client-bedrock-agentcore": "^3.0.0",
     "@aws-sdk/client-ec2": "^3.0.0",
     "@slack/bolt": "^3.17.0",
-    "chat-sdk": "^1.0.0",
-    "ioredis": "^5.3.0",
     "pino": "^8.17.0",
-    "pg": "^8.11.0",
     "zod": "^3.22.0"
   },
   "devDependencies": {
     "@types/node": "^20.10.0",
     "@types/pg": "^8.10.0",
     "dotenv-cli": "^7.3.0",
-    "@oxc/cli": "^0.15.0",
+    "oxlint": "^0.15.0",
     "pino-pretty": "^10.3.0",
     "tsx": "^4.7.0",
     "typescript": "^5.3.0",
