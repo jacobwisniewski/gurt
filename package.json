@@ -17,7 +17,10 @@
   },
   "dependencies": {
     "@aws-sdk/client-ec2": "^3.0.0",
-    "@slack/bolt": "^3.17.0",
+    "@chat-adapter/slack": "^4.14.0",
+    "@chat-adapter/state-redis": "^4.14.0",
+    "@opencode-ai/sdk": "^1.2.15",
+    "chat": "^4.14.0",
     "pino": "^8.17.0",
     "zod": "^3.22.0"
   },

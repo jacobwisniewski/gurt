@@ -1,15 +1,15 @@
-import { App } from "@slack/bolt";
-import { getConfig } from "./config/env";
+import { Chat } from "chat";
+import { createSlackAdapter } from "@chat-adapter/slack";
+import { createRedisState } from "@chat-adapter/state-redis";
 import { logger } from "./config/logger";
-import { createSandbox, getSandbox, destroySandbox, cleanupInactiveSandboxes, Sandbox } from "./sandbox";
+import { createSandbox, getSandbox, createOpencodeClientForSandbox } from "./sandbox";
 
-const config = getConfig();
-
-const slackApp = new App({
-  token: config.SLACK_BOT_TOKEN,
-  signingSecret: config.SLACK_SIGNING_SECRET,
-  socketMode: true,
-  appToken: config.SLACK_APP_TOKEN
+const bot = new Chat({
+  userName: "gurt",
+  adapters: {
+    slack: createSlackAdapter(),
+  },
+  state: createRedisState(),
 });
 
 const extractResponseText = (data: { parts?: Array<{ type: string; text?: string }> }): string => {
@@ -23,82 +23,46 @@ const extractResponseText = (data: { parts?: Array<{ type: string; text?: string
     .join("\n");
 };
 
-const handleMessage = async (threadId: string, userId: string, text: string, say: (message: { text: string; thread_ts?: string }) => Promise<void>) => {
-  logger.info({ threadId, userId }, "Message received");
+bot.onNewMention(async (thread, message) => {
+  const threadId = thread.id;
+  const userId = (message.author as { id?: string }).id || "unknown";
+  
+  logger.info({ threadId, userId }, "Mention received");
   
   try {
     const sandbox = await getOrCreateSandbox(threadId, userId);
-    const response = await sendToSandbox(sandbox, text);
-    const responseText = extractResponseText(response);
+    const client = createOpencodeClientForSandbox(sandbox);
     
-    await say({
-      text: responseText,
-      thread_ts: threadId
+    const response = await client.session.prompt({
+      path: { id: "default" },
+      body: {
+        parts: [{ type: "text", text: message.text }]
+      }
     });
+    
+    const responseData = response.data;
+    
+    if (!responseData) {
+      throw new Error("No response from sandbox");
+    }
+    
+    const responseText = extractResponseText(responseData);
+    await thread.post(responseText);
   } catch (error) {
-    logger.error({ threadId, error }, "Error processing message");
-    await say({
-      text: "Sorry, I encountered an error processing your request.",
-      thread_ts: threadId
-    });
+    logger.error({ threadId, error }, "Error processing mention");
+    await thread.post("Sorry, I encountered an error processing your request.");
   }
-};
+});
 
-const getOrCreateSandbox = async (threadId: string, userId: string): Promise<Sandbox> => {
+
+
+const getOrCreateSandbox = async (threadId: string, userId: string) => {
   const existing = getSandbox(threadId);
   if (existing) {
     return existing;
   }
-  
+
   return createSandbox(threadId, userId);
 };
 
-const sendToSandbox = async (sandbox: Sandbox, text: string): Promise<{ parts: Array<{ type: string; text: string }> }> => {
-  const response = await fetch(`${sandbox.opencodeUrl}/session/default/message`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Basic ${Buffer.from(`opencode:${sandbox.password}`).toString("base64")}`
-    },
-    body: JSON.stringify({
-      parts: [{ type: "text", text }]
-    })
-  });
-  
-  if (!response.ok) {
-    throw new Error(`Sandbox request failed: ${response.statusText}`);
-  }
-  
-  return response.json();
-};
-
-slackApp.event("app_mention", async ({ event, say }) => {
-  const threadId = event.thread_ts || event.ts;
-  const userId = event.user;
-  const text = event.text.replace(/<@\w+>/g, "").trim();
-  
-  await handleMessage(threadId, userId, text, say);
-});
-
-slackApp.message(async ({ message, say }) => {
-  if (!message.thread_ts) return;
-  
-  const threadId = message.thread_ts;
-  const hasSandbox = getSandbox(threadId);
-  
-  if (!hasSandbox) return;
-  
-  const userId = message.user;
-  const text = message.text || "";
-  
-  await handleMessage(threadId, userId, text, say);
-});
-
-setInterval(async () => {
-  await cleanupInactiveSandboxes(30);
-}, 60000);
-
-(async () => {
-  await slackApp.start();
-  logger.info("Gurt bot is running");
-})();
+logger.info("Gurt bot is running");

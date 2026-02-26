@@ -1,6 +1,9 @@
-import { EBSClient, CreateVolumeCommand } from "@aws-sdk/client-ec2";
+import { EC2Client, CreateVolumeCommand } from "@aws-sdk/client-ec2";
+import { createOpencodeClient } from "@opencode-ai/sdk";
 import { getConfig } from "./config/env";
 import { logger } from "./config/logger";
+
+const IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 
 export interface Sandbox {
   threadId: string;
@@ -10,23 +13,33 @@ export interface Sandbox {
   password: string;
   createdAt: Date;
   lastActivity: Date;
+  timeoutId: ReturnType<typeof setTimeout>;
 }
 
 const sandboxes: Map<string, Sandbox> = new Map();
 
 const config = getConfig();
 
-const ebsClient = new EBSClient({ region: config.AWS_REGION });
+const ec2Client = new EC2Client({ region: config.AWS_REGION });
+
+const scheduleCleanup = (threadId: string) => {
+  return setTimeout(async () => {
+    logger.info({ threadId }, "Sandbox idle timeout reached, cleaning up");
+    await destroySandbox(threadId);
+  }, IDLE_TIMEOUT_MS);
+};
 
 export const getSandbox = (threadId: string): Sandbox | undefined => {
   const sandbox = sandboxes.get(threadId);
   if (sandbox) {
     sandbox.lastActivity = new Date();
+    clearTimeout(sandbox.timeoutId);
+    sandbox.timeoutId = scheduleCleanup(threadId);
   }
   return sandbox;
 };
 
-export const createSandbox = async (threadId: string, userId: string): Promise<Sandbox> => {
+export const createSandbox = async (threadId: string, _userId: string): Promise<Sandbox> => {
   logger.info({ threadId }, "Creating sandbox");
   
   const volume = await createVolume(threadId);
@@ -45,7 +58,8 @@ export const createSandbox = async (threadId: string, userId: string): Promise<S
     opencodeUrl,
     password: config.OPENCODE_SERVER_PASSWORD,
     createdAt: new Date(),
-    lastActivity: new Date()
+    lastActivity: new Date(),
+    timeoutId: scheduleCleanup(threadId)
   };
   
   sandboxes.set(threadId, sandbox);
@@ -56,8 +70,14 @@ export const createSandbox = async (threadId: string, userId: string): Promise<S
   return sandbox;
 };
 
+export const createOpencodeClientForSandbox = (sandbox: Sandbox) => {
+  return createOpencodeClient({
+    baseUrl: sandbox.opencodeUrl
+  });
+};
+
 const createVolume = async (threadId: string): Promise<{ volumeId: string }> => {
-  const result = await ebsClient.send(new CreateVolumeCommand({
+  const result = await ec2Client.send(new CreateVolumeCommand({
     AvailabilityZone: config.AWS_AVAILABILITY_ZONE,
     Size: 10,
     VolumeType: "gp3",
@@ -76,7 +96,7 @@ const createVolume = async (threadId: string): Promise<{ volumeId: string }> => 
   return { volumeId: result.VolumeId! };
 };
 
-const createBedrockSession = async (threadId: string, volumeId: string): Promise<string> => {
+const createBedrockSession = async (threadId: string, _volumeId: string): Promise<string> => {
   const envVars: Record<string, string> = {
     NEW_RELIC_API_KEY: config.NEW_RELIC_API_KEY,
     GITHUB_TOKEN: config.GITHUB_TOKEN,
@@ -96,23 +116,20 @@ const createBedrockSession = async (threadId: string, volumeId: string): Promise
   return `arn:aws:bedrock-agentcore:session:${threadId}`;
 };
 
-const waitForSandbox = async (sessionArn: string): Promise<string> => {
+const waitForSandbox = async (_sessionArn: string): Promise<string> => {
   await new Promise(resolve => setTimeout(resolve, 5000));
   return `http://localhost:4096`;
 };
 
 const configureSandbox = async (sandbox: Sandbox): Promise<void> => {
-  await fetch(`${sandbox.opencodeUrl}/session/default/init`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Basic ${Buffer.from(`opencode:${sandbox.password}`).toString("base64")}`
-    },
-    body: JSON.stringify({
+  const client = createOpencodeClientForSandbox(sandbox);
+  await client.session.init({
+    path: { id: "default" },
+    body: {
       messageID: "init",
       providerID: "anthropic",
       modelID: "claude-3-5-sonnet-20241022"
-    })
+    }
   });
 };
 
@@ -122,20 +139,7 @@ export const destroySandbox = async (threadId: string): Promise<void> => {
   
   logger.info({ threadId }, "Destroying sandbox");
   
+  clearTimeout(sandbox.timeoutId);
   sandboxes.delete(threadId);
   logger.info({ threadId }, "Sandbox destroyed");
-};
-
-export const cleanupInactiveSandboxes = async (maxIdleMinutes: number = 30): Promise<void> => {
-  const now = new Date();
-  const maxIdleMs = maxIdleMinutes * 60 * 1000;
-  
-  for (const [threadId, sandbox] of sandboxes) {
-    const idleTime = now.getTime() - sandbox.lastActivity.getTime();
-    
-    if (idleTime > maxIdleMs) {
-      logger.info({ threadId, idleMinutes: Math.round(idleTime / 60000) }, "Cleaning up inactive sandbox");
-      await destroySandbox(threadId);
-    }
-  }
 };
