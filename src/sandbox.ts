@@ -1,4 +1,5 @@
 import { EC2Client, CreateVolumeCommand, AttachVolumeCommand, DetachVolumeCommand, DescribeVolumesCommand } from "@aws-sdk/client-ec2";
+
 import { createOpencodeClient } from "@opencode-ai/sdk";
 import { getConfig } from "./config/env";
 import { logger } from "./config/logger";
@@ -210,40 +211,11 @@ const configureSandbox = async (sandbox: Sandbox): Promise<void> => {
 export const destroySandbox = async (threadId: string): Promise<void> => {
   const sandbox = sandboxes.get(threadId);
   if (!sandbox) return;
-  
+
   logger.info({ threadId }, "Destroying sandbox (keeping volume)");
-  
+
   await detachVolume(sandbox.volumeId);
   sandboxes.delete(threadId);
-  
-  logger.info({ threadId }, "Sandbox destroyed, volume preserved");
-};
 
-export const permanentlyDeleteThread = async (threadId: string): Promise<void> => {
-  const volumeId = volumes.get(threadId);
-  
-  if (volumeId) {
-    logger.info({ threadId, volumeId }, "Permanently deleting thread volume");
-    
-    try {
-      await ec2Client.send(new DetachVolumeCommand({
-        VolumeId: volumeId
-      }));
-    } catch {}
-    
-    try {
-      const { DeleteVolumeCommand } = await import("@aws-sdk/client-ec2");
-      await ec2Client.send(new DeleteVolumeCommand({
-        VolumeId: volumeId
-      }));
-      logger.info({ threadId, volumeId }, "Volume deleted");
-    } catch (error) {
-      logger.error({ threadId, volumeId, error }, "Failed to delete volume");
-    }
-    
-    volumes.delete(threadId);
-  }
-  
-  sandboxes.delete(threadId);
-  logger.info({ threadId }, "Thread permanently deleted");
+  logger.info({ threadId }, "Sandbox destroyed, volume preserved");
 };
