@@ -1,4 +1,4 @@
-import { EC2Client, CreateVolumeCommand, DeleteVolumeCommand } from "@aws-sdk/client-ec2";
+import { EC2Client, CreateVolumeCommand, AttachVolumeCommand, DetachVolumeCommand, DescribeVolumesCommand } from "@aws-sdk/client-ec2";
 import { createOpencodeClient } from "@opencode-ai/sdk";
 import { getConfig } from "./config/env";
 import { logger } from "./config/logger";
@@ -14,10 +14,32 @@ export interface Sandbox {
 }
 
 const sandboxes: Map<string, Sandbox> = new Map();
+const volumes: Map<string, string> = new Map();
 
 const config = getConfig();
 
 const ec2Client = new EC2Client({ region: config.AWS_REGION });
+
+const findExistingVolume = async (threadId: string): Promise<string | undefined> => {
+  const cached = volumes.get(threadId);
+  if (cached) return cached;
+  
+  const result = await ec2Client.send(new DescribeVolumesCommand({
+    Filters: [
+      { Name: "tag:ThreadId", Values: [threadId] },
+      { Name: "tag:ManagedBy", Values: ["gurt"] },
+      { Name: "status", Values: ["available", "in-use"] }
+    ]
+  }));
+  
+  const volume = result.Volumes?.[0];
+  if (volume?.VolumeId) {
+    volumes.set(threadId, volume.VolumeId);
+    return volume.VolumeId;
+  }
+  
+  return undefined;
+};
 
 const isSandboxAlive = async (sandbox: Sandbox): Promise<boolean> => {
   try {
@@ -50,8 +72,9 @@ export const getSandbox = async (threadId: string): Promise<Sandbox | undefined>
   const alive = await isSandboxAlive(sandbox);
   
   if (!alive) {
-    logger.info({ threadId }, "Sandbox no longer alive, cleaning up");
-    await destroySandbox(threadId);
+    logger.info({ threadId }, "Sandbox no longer alive, will recreate");
+    await detachVolume(sandbox.volumeId);
+    sandboxes.delete(threadId);
     return undefined;
   }
   
@@ -62,19 +85,32 @@ export const getSandbox = async (threadId: string): Promise<Sandbox | undefined>
 export const createSandbox = async (threadId: string, _userId: string): Promise<Sandbox> => {
   logger.info({ threadId }, "Creating sandbox");
   
-  const volume = await createVolume(threadId);
-  logger.info({ threadId, volumeId: volume.volumeId }, "Volume created");
+  const existingVolumeId = await findExistingVolume(threadId);
+  let volumeId: string;
   
-  const sessionArn = await createBedrockSession(threadId, volume.volumeId);
+  if (existingVolumeId) {
+    logger.info({ threadId, volumeId: existingVolumeId }, "Reusing existing volume");
+    volumeId = existingVolumeId;
+  } else {
+    const volume = await createVolume(threadId);
+    volumeId = volume.volumeId;
+    volumes.set(threadId, volumeId);
+    logger.info({ threadId, volumeId }, "Created new volume");
+  }
+  
+  const sessionArn = await createBedrockSession(threadId, volumeId);
   logger.info({ threadId, sessionArn }, "Bedrock session created");
   
   const opencodeUrl = await waitForSandbox(sessionArn);
   logger.info({ threadId, opencodeUrl }, "Sandbox ready");
   
+  await attachVolume(volumeId);
+  logger.info({ threadId, volumeId }, "Volume attached");
+  
   const sandbox: Sandbox = {
     threadId,
     sessionArn,
-    volumeId: volume.volumeId,
+    volumeId,
     opencodeUrl,
     password: config.OPENCODE_SERVER_PASSWORD,
     createdAt: new Date(),
@@ -113,6 +149,25 @@ const createVolume = async (threadId: string): Promise<{ volumeId: string }> => 
   }));
   
   return { volumeId: result.VolumeId! };
+};
+
+const attachVolume = async (volumeId: string): Promise<void> => {
+  await ec2Client.send(new AttachVolumeCommand({
+    VolumeId: volumeId,
+    InstanceId: "sandbox-instance",
+    Device: "/dev/sdf"
+  }));
+};
+
+const detachVolume = async (volumeId: string): Promise<void> => {
+  try {
+    await ec2Client.send(new DetachVolumeCommand({
+      VolumeId: volumeId
+    }));
+    logger.info({ volumeId }, "Volume detached");
+  } catch (error) {
+    logger.error({ volumeId, error }, "Failed to detach volume");
+  }
 };
 
 const createBedrockSession = async (threadId: string, _volumeId: string): Promise<string> => {
@@ -156,17 +211,39 @@ export const destroySandbox = async (threadId: string): Promise<void> => {
   const sandbox = sandboxes.get(threadId);
   if (!sandbox) return;
   
-  logger.info({ threadId }, "Destroying sandbox");
+  logger.info({ threadId }, "Destroying sandbox (keeping volume)");
   
-  try {
-    await ec2Client.send(new DeleteVolumeCommand({
-      VolumeId: sandbox.volumeId
-    }));
-    logger.info({ threadId, volumeId: sandbox.volumeId }, "EBS volume deleted");
-  } catch (error) {
-    logger.error({ threadId, error }, "Failed to delete EBS volume");
+  await detachVolume(sandbox.volumeId);
+  sandboxes.delete(threadId);
+  
+  logger.info({ threadId }, "Sandbox destroyed, volume preserved");
+};
+
+export const permanentlyDeleteThread = async (threadId: string): Promise<void> => {
+  const volumeId = volumes.get(threadId);
+  
+  if (volumeId) {
+    logger.info({ threadId, volumeId }, "Permanently deleting thread volume");
+    
+    try {
+      await ec2Client.send(new DetachVolumeCommand({
+        VolumeId: volumeId
+      }));
+    } catch {}
+    
+    try {
+      const { DeleteVolumeCommand } = await import("@aws-sdk/client-ec2");
+      await ec2Client.send(new DeleteVolumeCommand({
+        VolumeId: volumeId
+      }));
+      logger.info({ threadId, volumeId }, "Volume deleted");
+    } catch (error) {
+      logger.error({ threadId, volumeId, error }, "Failed to delete volume");
+    }
+    
+    volumes.delete(threadId);
   }
   
   sandboxes.delete(threadId);
-  logger.info({ threadId }, "Sandbox destroyed");
+  logger.info({ threadId }, "Thread permanently deleted");
 };
