@@ -57,7 +57,7 @@ bot.onNewMention(async (thread, message) => {
 
 
 const getOrCreateSandbox = async (threadId: string, userId: string) => {
-  const existing = getSandbox(threadId);
+  const existing = await getSandbox(threadId);
   if (existing) {
     return existing;
   }

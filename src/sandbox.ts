@@ -1,9 +1,7 @@
-import { EC2Client, CreateVolumeCommand } from "@aws-sdk/client-ec2";
+import { EC2Client, CreateVolumeCommand, DeleteVolumeCommand } from "@aws-sdk/client-ec2";
 import { createOpencodeClient } from "@opencode-ai/sdk";
 import { getConfig } from "./config/env";
 import { logger } from "./config/logger";
-
-const IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 
 export interface Sandbox {
   threadId: string;
@@ -13,7 +11,6 @@ export interface Sandbox {
   password: string;
   createdAt: Date;
   lastActivity: Date;
-  timeoutId: ReturnType<typeof setTimeout>;
 }
 
 const sandboxes: Map<string, Sandbox> = new Map();
@@ -22,20 +19,43 @@ const config = getConfig();
 
 const ec2Client = new EC2Client({ region: config.AWS_REGION });
 
-const scheduleCleanup = (threadId: string) => {
-  return setTimeout(async () => {
-    logger.info({ threadId }, "Sandbox idle timeout reached, cleaning up");
-    await destroySandbox(threadId);
-  }, IDLE_TIMEOUT_MS);
+const isSandboxAlive = async (sandbox: Sandbox): Promise<boolean> => {
+  try {
+    const client = createOpencodeClient({
+      baseUrl: sandbox.opencodeUrl
+    });
+    
+    await client.session.init({
+      path: { id: "default" },
+      body: {
+        messageID: "ping",
+        providerID: "anthropic",
+        modelID: "claude-3-5-sonnet-20241022"
+      }
+    });
+    
+    return true;
+  } catch {
+    return false;
+  }
 };
 
-export const getSandbox = (threadId: string): Sandbox | undefined => {
+export const getSandbox = async (threadId: string): Promise<Sandbox | undefined> => {
   const sandbox = sandboxes.get(threadId);
-  if (sandbox) {
-    sandbox.lastActivity = new Date();
-    clearTimeout(sandbox.timeoutId);
-    sandbox.timeoutId = scheduleCleanup(threadId);
+  
+  if (!sandbox) {
+    return undefined;
   }
+  
+  const alive = await isSandboxAlive(sandbox);
+  
+  if (!alive) {
+    logger.info({ threadId }, "Sandbox no longer alive, cleaning up");
+    await destroySandbox(threadId);
+    return undefined;
+  }
+  
+  sandbox.lastActivity = new Date();
   return sandbox;
 };
 
@@ -58,8 +78,7 @@ export const createSandbox = async (threadId: string, _userId: string): Promise<
     opencodeUrl,
     password: config.OPENCODE_SERVER_PASSWORD,
     createdAt: new Date(),
-    lastActivity: new Date(),
-    timeoutId: scheduleCleanup(threadId)
+    lastActivity: new Date()
   };
   
   sandboxes.set(threadId, sandbox);
@@ -139,7 +158,15 @@ export const destroySandbox = async (threadId: string): Promise<void> => {
   
   logger.info({ threadId }, "Destroying sandbox");
   
-  clearTimeout(sandbox.timeoutId);
+  try {
+    await ec2Client.send(new DeleteVolumeCommand({
+      VolumeId: sandbox.volumeId
+    }));
+    logger.info({ threadId, volumeId: sandbox.volumeId }, "EBS volume deleted");
+  } catch (error) {
+    logger.error({ threadId, error }, "Failed to delete EBS volume");
+  }
+  
   sandboxes.delete(threadId);
   logger.info({ threadId }, "Sandbox destroyed");
 };
