@@ -683,3 +683,84 @@ flyway -configFiles=database/flyway.conf migrate
 - [ ] Internal observability UI
 - [ ] Redis cache for hot sessions (optional)
 - [ ] Multi-workspace OAuth support
+
+## MCP Integrations
+
+### Glean MCP (Internal Documentation Search)
+
+**Overview:** Integrate Glean search via MCP to give opencode access to REA internal documentation, APIs, and knowledge base.
+
+**Authentication Approach: Service Account (Option A)**
+
+**Rationale:**
+- Simple setup - no per-user OAuth flow
+- Shared context across all users
+- Works immediately without user authentication
+- Credentials managed via environment variables
+
+**Architecture:**
+
+```
+Sandbox Container
+  ├─ opencode agent
+  ├─ gh, nr, jira, aws CLI tools
+  └─ Glean MCP Server (service account auth)
+         ↓
+    Glean API (REA internal)
+         ↓
+    Internal docs, API specs, runbooks
+```
+
+**Configuration:**
+
+```typescript
+// Environment variables
+GLEAN_MCP_ENABLED=true
+GLEAN_MCP_URL=https://glean.rea-group.com/mcp
+GLEAN_MCP_CLIENT_ID=service-account-client-id
+GLEAN_MCP_CLIENT_SECRET=service-account-secret
+
+// opencode session init
+await client.session.init({
+  path: { id: "default" },
+  body: {
+    mcp: {
+      glean: {
+        type: "remote",
+        url: process.env.GLEAN_MCP_URL,
+        auth: {
+          type: "oauth",
+          clientId: process.env.GLEAN_MCP_CLIENT_ID,
+          clientSecret: process.env.GLEAN_MCP_CLIENT_SECRET,
+        },
+        enabled: true,
+      },
+    },
+  },
+});
+```
+
+**Use Cases:**
+- Search internal documentation during debugging
+- Look up API specifications and schemas
+- Find runbooks and operational procedures
+- Answer questions about internal systems
+
+**Example Prompts:**
+```
+"Search Glean for the deployment runbook for service-auth"
+"What does Glean say about the conversational-experience-api architecture?"
+"Find error handling documentation in Glean"
+```
+
+**Security Considerations:**
+- Service account should have read-only access
+- Store credentials in AWS Secrets Manager
+- No sensitive data logged to Slack
+- Users see only what service account can access
+
+**Future: Per-User Auth (Option B)**
+- Allow individual users to authenticate their Glean account
+- Personal context (what user can see)
+- Store OAuth tokens per user in database
+- Fallback to service account if user not authenticated
