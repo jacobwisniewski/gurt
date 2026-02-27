@@ -24,7 +24,7 @@ const envSchema = z.object({
     .min(16),
   GURT_CONTAINER_IMAGE: z.string().default("gurt-sandbox:latest"),
   KMS_KEY_ID: z.string().optional(),
-  DATABASE_URL: z.string().url().optional(),
+  DATABASE_URL: z.string().url(),
   REDIS_URL: z.string().url().optional(),
   LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
 });

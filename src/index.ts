@@ -2,7 +2,7 @@ import { Chat } from "chat";
 import { createSlackAdapter } from "@chat-adapter/slack";
 import { createRedisState } from "@chat-adapter/state-redis";
 import { logger } from "./config/logger";
-import { createSandbox, getSandbox, createOpencodeClientForSandbox } from "./sandbox";
+import { createSandbox, getSandbox, isSandboxActive, createOpencodeClientForSandbox } from "./sandbox";
 
 const bot = new Chat({
   userName: "gurt",
@@ -54,12 +54,15 @@ bot.onNewMention(async (thread, message) => {
   }
 });
 
-
-
 const getOrCreateSandbox = async (threadId: string, userId: string) => {
-  const existing = await getSandbox(threadId);
+  const existing = getSandbox(threadId);
+  
   if (existing) {
-    return existing;
+    const active = await isSandboxActive(threadId);
+    if (active) {
+      return existing;
+    }
+    logger.info({ threadId }, "Sandbox inactive, recreating");
   }
 
   return createSandbox(threadId, userId);
