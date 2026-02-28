@@ -1,6 +1,6 @@
 import { BedrockAgentCoreClient, StartCodeInterpreterSessionCommand, StopCodeInterpreterSessionCommand, GetCodeInterpreterSessionCommand } from "@aws-sdk/client-bedrock-agentcore";
 import { EC2Client, CreateVolumeCommand, DescribeVolumesCommand } from "@aws-sdk/client-ec2";
-import { createOpencodeClient } from "@opencode-ai/sdk";
+import { createOpencodeClient as createOpencodeClientFromSdk } from "@opencode-ai/sdk";
 import { getConfig } from "./config/env";
 import { logger } from "./config/logger";
 
@@ -14,7 +14,7 @@ export interface Sandbox {
   lastActivity: Date;
 }
 
-const sandboxes: Map<string, Sandbox> = new Map();
+export type SandboxClient = ReturnType<typeof createOpencodeClientFromSdk>;
 
 const config = getConfig();
 
@@ -34,17 +34,12 @@ const findExistingVolume = async (threadId: string): Promise<string | undefined>
   return volume?.VolumeId;
 };
 
-export const getSandbox = (threadId: string): Sandbox | undefined => {
-  const sandbox = sandboxes.get(threadId);
-  
-  if (sandbox) {
-    sandbox.lastActivity = new Date();
-  }
-  
-  return sandbox;
-};
-
-export const createSandbox = async (threadId: string, _userId: string): Promise<Sandbox> => {
+export const createSandbox = async (threadId: string, _userId: string): Promise<{
+  threadId: string;
+  codeInterpreterId: string;
+  volumeId: string;
+  opencodeUrl: string;
+}> => {
   logger.info({ threadId }, "Creating sandbox");
   
   const existingVolumeId = await findExistingVolume(threadId);
@@ -75,19 +70,11 @@ export const createSandbox = async (threadId: string, _userId: string): Promise<
   }
   
   const sessionResult = await bedrockClient.send(new StartCodeInterpreterSessionCommand({
-    codeInterpreterIdentifier: `gurt-thread-${threadId}`,
-    environmentVariables: {
-      NEW_RELIC_API_KEY: config.NEW_RELIC_API_KEY,
-      GITHUB_TOKEN: config.GITHUB_TOKEN,
-      AWS_REGION: config.AWS_REGION,
-      GURT_THREAD_ID: threadId,
-      OPENCODE_SERVER_PASSWORD: config.OPENCODE_SERVER_PASSWORD,
-      GURT_VOLUME_ID: volumeId
-    }
+    codeInterpreterIdentifier: `gurt-thread-${threadId}`
   }));
   
   const codeInterpreterId = sessionResult.codeInterpreterIdentifier!;
-  const opencodeUrl = sessionResult.endpoint || `http://localhost:4096`;
+  const opencodeUrl = `http://localhost:4096`;
   
   logger.info({ threadId, codeInterpreterId, opencodeUrl }, "Bedrock session created");
   
@@ -101,22 +88,25 @@ export const createSandbox = async (threadId: string, _userId: string): Promise<
     lastActivity: new Date()
   };
   
-  sandboxes.set(threadId, sandbox);
-  
   await configureSandbox(sandbox);
   logger.info({ threadId }, "Sandbox configured");
   
-  return sandbox;
+  return {
+    threadId,
+    codeInterpreterId,
+    volumeId,
+    opencodeUrl
+  };
 };
 
-export const createOpencodeClientForSandbox = (sandbox: Sandbox) => {
-  return createOpencodeClient({
-    baseUrl: sandbox.opencodeUrl
+export const createClient = (opencodeUrl: string): SandboxClient => {
+  return createOpencodeClientFromSdk({
+    baseUrl: opencodeUrl
   });
 };
 
 const configureSandbox = async (sandbox: Sandbox): Promise<void> => {
-  const client = createOpencodeClientForSandbox(sandbox);
+  const client = createClient(sandbox.opencodeUrl);
   await client.session.init({
     path: { id: "default" },
     body: {
@@ -127,38 +117,27 @@ const configureSandbox = async (sandbox: Sandbox): Promise<void> => {
   });
 };
 
-export const stopSandbox = async (threadId: string): Promise<void> => {
-  const sandbox = sandboxes.get(threadId);
-  if (!sandbox) return;
-  
-  logger.info({ threadId, codeInterpreterId: sandbox.codeInterpreterId }, "Stopping sandbox");
+export const stopSandbox = async (codeInterpreterId: string): Promise<void> => {
+  logger.info({ codeInterpreterId }, "Stopping sandbox");
   
   await bedrockClient.send(new StopCodeInterpreterSessionCommand({
-    codeInterpreterIdentifier: sandbox.codeInterpreterId
-  }));
+    codeInterpreterIdentifier: codeInterpreterId
+  } as any));
   
-  sandboxes.delete(threadId);
-  logger.info({ threadId }, "Sandbox stopped");
+  logger.info({ codeInterpreterId }, "Sandbox stopped");
 };
 
-export const isSandboxActive = async (threadId: string): Promise<boolean> => {
-  const sandbox = sandboxes.get(threadId);
-  if (!sandbox) return false;
-  
+export const isSandboxActive = async (codeInterpreterId: string): Promise<boolean> => {
   try {
     const result = await bedrockClient.send(new GetCodeInterpreterSessionCommand({
-      codeInterpreterIdentifier: sandbox.codeInterpreterId
-    }));
+      codeInterpreterIdentifier: codeInterpreterId
+    } as any));
     
-    const isActive = result.status !== "STOPPED" && result.status !== "FAILED";
-    
-    if (!isActive) {
-      sandboxes.delete(threadId);
-    }
+    const status = result.status as string | undefined;
+    const isActive = status !== "STOPPED" && status !== "FAILED";
     
     return isActive;
   } catch {
-    sandboxes.delete(threadId);
     return false;
   }
 };

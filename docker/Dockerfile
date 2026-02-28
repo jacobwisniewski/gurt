@@ -36,6 +36,11 @@ RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip" -o "awscliv
     ./aws/install && \
     rm -rf awscliv2.zip aws/
 
+# Install Jira CLI
+RUN curl -L https://github.com/ankitpokhrel/jira-cli/releases/latest/download/jira_$(uname -s)_$(uname -m).tar.gz | tar -xz && \
+    mv jira /usr/local/bin/ && \
+    chmod +x /usr/local/bin/jira
+
 # Install opencode via npm
 RUN npm install -g opencode-ai@latest
 

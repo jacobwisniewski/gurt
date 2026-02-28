@@ -37,9 +37,8 @@ AWS_PROFILE=default
 # Bedrock AgentCore
 BEDROCK_AGENTCORE_ROLE_ARN=arn:aws:iam::ACCOUNT:role/BedrockAgentCoreExecutionRole
 
-# Database (optional for personal - can skip for MVP)
+# PostgreSQL Database (optional for personal - can skip for MVP)
 DATABASE_URL=postgresql://user:pass@host:5432/gurt
-REDIS_URL=redis://host:6379
 ```
 
 ### 3. Deploy
@@ -61,7 +60,6 @@ npm run deploy:personal
 
 - Access to The PaaS via Realm
 - db-in-a-box configured for PostgreSQL
-- ElastiCache configured for Redis
 
 ### 2. Deploy via Realm
 

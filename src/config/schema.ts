@@ -24,9 +24,25 @@ const envSchema = z.object({
     .min(16),
   GURT_CONTAINER_IMAGE: z.string().default("gurt-sandbox:latest"),
   KMS_KEY_ID: z.string().optional(),
-  DATABASE_URL: z.string().url(),
-  REDIS_URL: z.string().url().optional(),
+  
+  // PostgreSQL Configuration - either DATABASE_URL or individual params
+  DATABASE_URL: z.string().url().optional(),
+  POSTGRES_HOST: z.string().default("localhost"),
+  POSTGRES_PORT: z.string().transform((val) => parseInt(val, 10)).default("5432"),
+  POSTGRES_USER: z.string().default("postgres"),
+  POSTGRES_PASSWORD: z.string().default(""),
+  POSTGRES_DB: z.string().default("gurt"),
+
   LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
+  
+  // Model Configuration
+  MODEL_PROVIDER: z.enum(["bedrock", "openai", "anthropic"]).default("bedrock"),
+  MODEL_ID: z.string().default("anthropic.claude-3-5-sonnet-20241022-v2:0"),
+  
+  // Jira Configuration (optional)
+  JIRA_API_TOKEN: z.string().optional(),
+  JIRA_EMAIL: z.string().email().optional(),
+  JIRA_HOST: z.string().url().optional(),
 });
 
 export type EnvConfig = z.infer<typeof envSchema>;

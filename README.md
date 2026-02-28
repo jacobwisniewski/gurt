@@ -62,6 +62,42 @@ gurt/
 
 ### Installation
 
+#### Option 1: Docker Compose (Recommended for Local Development)
+
+```bash
+# Clone and install
+npm install
+
+# Copy environment file
+cp .env.docker .env
+
+# Edit .env and add your Slack/AWS credentials
+cp .env.docker .env
+# Edit .env and add your Slack/AWS credentials
+
+# Start infrastructure (PostgreSQL)
+./scripts/dev.sh up
+
+# Run database migrations
+./scripts/dev.sh migrate
+
+# Start the bot
+npm run dev
+```
+
+**Helper Commands:**
+```bash
+./scripts/dev.sh up      # Start infrastructure services
+./scripts/dev.sh down    # Stop services
+./scripts/dev.sh migrate # Run database migrations
+./scripts/dev.sh logs    # View service logs
+./scripts/dev.sh tools   # Start Adminer (DB UI at http://localhost:8080)
+./scripts/dev.sh reset   # Stop and remove all data
+./scripts/dev.sh dev     # Start everything and run the bot
+```
+
+#### Option 2: Manual Setup
+
 ```bash
 # Clone and install
 npm install
@@ -69,6 +105,20 @@ npm install
 # Configure environment
 cp .env.example .env
 # Edit .env with your credentials
+
+# Database Configuration (choose one):
+# Option 1: DATABASE_URL (required for migrations)
+# DATABASE_URL=postgresql://user:password@localhost:5432/gurt
+#
+# Option 2: Individual parameters
+# POSTGRES_HOST=localhost
+# POSTGRES_PORT=5432
+# POSTGRES_USER=postgres
+# POSTGRES_PASSWORD=your-password
+# POSTGRES_DB=gurt
+
+# Run database migrations (if using DATABASE_URL)
+npm run db:migrate
 
 # Run locally
 npm run dev
