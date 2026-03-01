@@ -173,7 +173,7 @@ const getOrCreateSandboxSession = async (
   deps: HandleMentionDeps,
   threadId: string,
   context: AgentContext.AgentContext
-): Promise<{ sessionId: string; volumeId: string; client: ReturnType<typeof import("../sandbox/index.js")["createOpencodeClient"]> }> => {
+): Promise<{ sessionId: string; volumeId: string; client: NonNullable<Parameters<typeof deps.sandbox.getOrCreateSession>[0]> extends string ? ReturnType<typeof deps.sandbox.createClientForSession> : never }> => {
   const dbSession = await deps.sessionManager.getSession(threadId);
 
   if (dbSession && dbSession.status === "active") {
@@ -184,7 +184,7 @@ const getOrCreateSandboxSession = async (
       return {
         sessionId: dbSession.codeInterpreterId,
         volumeId: dbSession.volumeId,
-        client: null as unknown as ReturnType<typeof import("../sandbox/index.js")["createOpencodeClient"]>
+        client: deps.sandbox.createClientForSession(dbSession.codeInterpreterId)
       };
     } else {
       deps.logger.info({ threadId, sessionId: dbSession.codeInterpreterId }, "Session inactive, stopping");

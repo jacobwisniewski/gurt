@@ -95,6 +95,10 @@ export const createBedrockProvider = (deps: SandboxProviderDeps): SandboxProvide
       } catch {
         return false;
       }
+    },
+
+    createClientForSession: (): ReturnType<typeof createOpencodeClient> => {
+      return createOpencodeClient(BEDROCK_OPENCODE_URL);
     }
   };
 };

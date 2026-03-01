@@ -12,6 +12,7 @@ export interface SandboxProvider {
   getOrCreateSession(threadId: string, userId: string): Promise<SandboxSession>;
   stopSandbox(sessionId: string): Promise<void>;
   isSandboxActive(sessionId: string): Promise<boolean>;
+  createClientForSession(sessionId: string): SandboxClient;
 }
 
 export interface SandboxProviderDeps {

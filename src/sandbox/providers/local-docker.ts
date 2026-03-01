@@ -14,6 +14,13 @@ const sanitizeName = (threadId: string): string => {
   return threadId.replace(/[^a-zA-Z0-9_-]/g, "-").toLowerCase();
 };
 
+const extractThreadId = (containerName: string): string => {
+  if (containerName.startsWith(CONTAINER_PREFIX + "-")) {
+    return containerName.substring(CONTAINER_PREFIX.length + 1);
+  }
+  return containerName;
+};
+
 const getContainerName = (threadId: string): string => {
   return `${CONTAINER_PREFIX}-${sanitizeName(threadId)}`;
 };
@@ -213,6 +220,12 @@ export const createLocalDockerProvider = (deps: SandboxProviderDeps): SandboxPro
       } catch {
         return false;
       }
+    },
+
+    createClientForSession: (sessionId: string): SandboxClient => {
+      const threadId = extractThreadId(sessionId);
+      const port = getPortForThread(threadId);
+      return createClient(port);
     }
   };
 };
