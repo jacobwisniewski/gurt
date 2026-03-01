@@ -1,4 +1,3 @@
-
 import type { Thread, Message } from "chat";
 import type { SlackAdapter } from "@chat-adapter/slack";
 import type { Logger } from "pino";
@@ -6,7 +5,7 @@ import type { LanguageModel } from "ai";
 import * as SessionManager from "./session-manager.js";
 import * as AgentContext from "./agent-context.js";
 import * as Agent from "../agent/index.js";
-import type { SandboxClient } from "../sandbox.js";
+import type { SandboxProvider, SandboxClient } from "../sandbox/index.js";
 
 interface ExecutionLogEntry {
   type: "command";
@@ -24,7 +23,7 @@ export interface HandleMentionDeps {
     getSession: (threadId: string) => Promise<SessionManager.Session | null>;
     createSession: (
       threadId: string,
-      codeInterpreterId: string,
+      sessionId: string,
       volumeId: string,
       context: SessionManager.ThreadContext
     ) => Promise<SessionManager.Session>;
@@ -47,21 +46,12 @@ export interface HandleMentionDeps {
       }>
     >;
   };
-  sandbox: {
-    createSandbox: (threadId: string, userId: string) => Promise<{
-      threadId: string;
-      codeInterpreterId: string;
-      volumeId: string;
-      opencodeUrl: string;
-    }>;
-    isSandboxActive: (codeInterpreterId: string) => Promise<boolean>;
-    createOpencodeClient: (opencodeUrl: string) => SandboxClient;
-    stopSandbox: (codeInterpreterId: string) => Promise<void>;
-  };
+  sandbox: SandboxProvider;
+  createOpencodeClient: (opencodeUrl: string) => SandboxClient;
 }
 
 export interface SandboxSession {
-  codeInterpreterId: string;
+  sessionId: string;
   volumeId: string;
   opencodeUrl: string;
   client: SandboxClient;
@@ -208,7 +198,7 @@ const getOrCreateSandboxSession = async (
   const dbSession = await deps.sessionManager.getSession(threadId);
 
   if (dbSession && dbSession.status === "active") {
-    // Verify it's still active via AWS
+    // Verify it's still active via provider
     const isActive = await deps.sandbox.isSandboxActive(dbSession.codeInterpreterId);
     
     if (isActive) {
@@ -216,17 +206,17 @@ const getOrCreateSandboxSession = async (
       // We need to determine the opencode URL - this should ideally be stored in DB
       // For now, using default
       const opencodeUrl = "http://localhost:4096";
-      const client = deps.sandbox.createOpencodeClient(opencodeUrl);
+      const client = deps.createOpencodeClient(opencodeUrl);
 
       return {
-        codeInterpreterId: dbSession.codeInterpreterId,
+        sessionId: dbSession.codeInterpreterId,
         volumeId: dbSession.volumeId,
         opencodeUrl,
         client
       };
     } else {
-      // Session is inactive in AWS, update database
-      deps.logger.info({ threadId, codeInterpreterId: dbSession.codeInterpreterId }, "Session inactive, cleaning up");
+      // Session is inactive, update database
+      deps.logger.info({ threadId, sessionId: dbSession.codeInterpreterId }, "Session inactive, cleaning up");
       await deps.sandbox.stopSandbox(dbSession.codeInterpreterId);
     }
   }
@@ -238,7 +228,7 @@ const getOrCreateSandboxSession = async (
   // Save to database
   await deps.sessionManager.createSession(
     threadId,
-    sandbox.codeInterpreterId,
+    sandbox.sessionId,
     sandbox.volumeId,
     {
       user: {
@@ -252,10 +242,10 @@ const getOrCreateSandboxSession = async (
     }
   );
 
-  const client = deps.sandbox.createOpencodeClient(sandbox.opencodeUrl);
+  const client = deps.createOpencodeClient(sandbox.opencodeUrl);
 
   return {
-    codeInterpreterId: sandbox.codeInterpreterId,
+    sessionId: sandbox.sessionId,
     volumeId: sandbox.volumeId,
     opencodeUrl: sandbox.opencodeUrl,
     client

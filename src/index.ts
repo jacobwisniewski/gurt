@@ -7,12 +7,7 @@ import { getConfig } from "./config/env.js";
 import * as AgentController from "./core/agent-controller.js";
 import * as SessionManager from "./core/session-manager.js";
 import { createPostgresState } from "./adapters/state-postgres.js";
-import {
-  createSandbox,
-  isSandboxActive,
-  createClient,
-  stopSandbox
-} from "./sandbox.js";
+import { createSandboxProvider, createOpencodeClient } from "./sandbox/index.js";
 
 const config = getConfig();
 
@@ -34,6 +29,9 @@ const bot = new Chat({
   state: createPostgresState(db)
 });
 
+// Create sandbox provider
+const sandboxProvider = createSandboxProvider({ logger });
+
 // Create bound handlers with injected dependencies
 const createHandleMention = (): ((thread: Parameters<typeof AgentController.handleMention>[1], message: Parameters<typeof AgentController.handleMention>[2]) => Promise<void>) => {
   const deps: AgentController.HandleMentionDeps = {
@@ -42,20 +40,16 @@ const createHandleMention = (): ((thread: Parameters<typeof AgentController.hand
     opencodePassword: config.OPENCODE_SERVER_PASSWORD,
     sessionManager: {
       getSession: (threadId) => SessionManager.getSession(sessionManagerDeps, threadId),
-      createSession: (threadId, codeInterpreterId, volumeId, context) =>
-        SessionManager.createSession(sessionManagerDeps, threadId, codeInterpreterId, volumeId, context),
+      createSession: (threadId, sessionId, volumeId, context) =>
+        SessionManager.createSession(sessionManagerDeps, threadId, sessionId, volumeId, context),
       updateLastActivity: (threadId) => SessionManager.updateLastActivity(sessionManagerDeps, threadId),
       saveMessage: (threadId, role, content, metadata) =>
         SessionManager.saveMessage(sessionManagerDeps, threadId, role, content, metadata),
       getConversationHistory: (threadId, limit) =>
         SessionManager.getConversationHistory(sessionManagerDeps, threadId, limit)
     },
-    sandbox: {
-      createSandbox,
-      isSandboxActive,
-      createOpencodeClient: createClient,
-      stopSandbox
-    }
+    sandbox: sandboxProvider,
+    createOpencodeClient
   };
 
   return (thread, message) => AgentController.handleMention(deps, thread, message);

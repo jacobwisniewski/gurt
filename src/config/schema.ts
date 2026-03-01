@@ -35,6 +35,10 @@ const envSchema = z.object({
 
   LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
   
+  // Sandbox Provider Configuration
+  SANDBOX_PROVIDER: z.enum(["bedrock", "local"]).default("bedrock"),
+  LOCAL_SANDBOX_IMAGE: z.string().default("gurt-sandbox:latest"),
+  
   // Model Configuration
   MODEL_PROVIDER: z.enum(["bedrock", "openai", "anthropic"]).default("bedrock"),
   MODEL_ID: z.string().default("anthropic.claude-3-5-sonnet-20241022-v2:0"),
