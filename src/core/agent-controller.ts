@@ -5,7 +5,7 @@ import type { LanguageModel } from "ai";
 import * as SessionManager from "./session-manager.js";
 import * as AgentContext from "./agent-context.js";
 import * as Agent from "../agent/index.js";
-import type { SandboxProvider, SandboxClient } from "../sandbox/index.js";
+import type { SandboxProvider } from "../sandbox/index.js";
 
 interface ExecutionLogEntry {
   type: "command";
@@ -47,14 +47,12 @@ export interface HandleMentionDeps {
     >;
   };
   sandbox: SandboxProvider;
-  createOpencodeClient: (opencodeUrl: string) => SandboxClient;
 }
 
 export interface SandboxSession {
   sessionId: string;
   volumeId: string;
-  opencodeUrl: string;
-  client: SandboxClient;
+  client: ReturnType<typeof import("../sandbox/index.js")["createOpencodeClient"]>;
 }
 
 export const handleMention = async (
@@ -69,11 +67,9 @@ export const handleMention = async (
   deps.logger.info({ threadId, userId, userName }, "Mention received");
 
   try {
-    // Subscribe to thread for follow-up messages
     await thread.subscribe();
     deps.logger.info({ threadId }, "Subscribed to thread");
 
-    // Build full context (Slack + Sandbox)
     const context = await AgentContext.buildContext(
       {
         getSession: deps.sessionManager.getSession,
@@ -84,11 +80,9 @@ export const handleMention = async (
     );
     deps.logger.info({ threadId, hasSandbox: !!context.sandbox.sessionId }, "Context built");
 
-    // Get agent decision
     const decision = await Agent.decide({ model: deps.model }, context);
     deps.logger.info({ threadId, requiresSandbox: decision.requiresSandbox }, "Agent decision made");
 
-    // Execute based on decision
     if (decision.requiresSandbox) {
       await executeInSandbox(deps, thread, decision, context);
     } else {
@@ -109,23 +103,18 @@ const executeInSandbox = async (
   const threadId = thread.id;
   const slack = thread.adapter as SlackAdapter;
 
-  // Get or create sandbox session from database
   const session = await getOrCreateSandboxSession(deps, threadId, context);
 
-  // Show typing indicator
   await slack.startTyping(threadId, "Processing...");
 
-  // Save user message to history
   await deps.sessionManager.saveMessage(
     threadId,
     "user",
     context.slack.currentMessage.text
   );
 
-  // Track execution log
   const executionLog: ExecutionLogEntry[] = [];
 
-  // Start prompt and subscribe to events for real-time updates
   const promptPromise = session.client.session.prompt({
     path: { id: "default" },
     body: {
@@ -133,7 +122,6 @@ const executeInSandbox = async (
     }
   });
 
-  // Subscribe to events for real-time updates and capture execution log
   try {
     const events = await session.client.global.event();
     for await (const event of events.stream) {
@@ -142,13 +130,12 @@ const executeInSandbox = async (
         const command = (event as { properties?: { command?: string } }).properties?.command;
         if (command) {
           await slack.startTyping(threadId, `Running: ${command}`);
-          // Add to execution log (we'll update with output later)
           executionLog.push({
             type: "command",
             command,
-            output: "", // Will be filled from response
+            output: "",
             timestamp: new Date(),
-            success: true // Assume success initially
+            success: true
           });
         }
       }
@@ -157,7 +144,6 @@ const executeInSandbox = async (
     deps.logger.warn({ threadId, error }, "Event subscription error (non-critical)");
   }
 
-  // Wait for final response
   const response = await promptPromise;
   const responseData = response.data;
 
@@ -165,13 +151,9 @@ const executeInSandbox = async (
     throw new Error("No response from sandbox");
   }
 
-  // Extract and format response
   const responseText = extractResponseText(responseData);
-
-  // Try to extract command outputs from response for execution log
   enrichExecutionLogWithOutputs(executionLog, responseText);
 
-  // Save assistant response to history with execution log metadata
   await deps.sessionManager.saveMessage(
     threadId,
     "assistant",
@@ -179,10 +161,8 @@ const executeInSandbox = async (
     { executionLog }
   );
 
-  // Update last activity
   await deps.sessionManager.updateLastActivity(threadId);
 
-  // Post formatted response
   const formattedResponse = formatResponse(responseText);
   await thread.post(formattedResponse);
 
@@ -193,62 +173,42 @@ const getOrCreateSandboxSession = async (
   deps: HandleMentionDeps,
   threadId: string,
   context: AgentContext.AgentContext
-): Promise<SandboxSession> => {
-  // Check if session exists in database
+): Promise<{ sessionId: string; volumeId: string; client: ReturnType<typeof import("../sandbox/index.js")["createOpencodeClient"]> }> => {
   const dbSession = await deps.sessionManager.getSession(threadId);
 
   if (dbSession && dbSession.status === "active") {
-    // Verify it's still active via provider
     const isActive = await deps.sandbox.isSandboxActive(dbSession.codeInterpreterId);
     
     if (isActive) {
-      // Create client on-demand from database info
-      // We need to determine the opencode URL - this should ideally be stored in DB
-      // For now, using default
-      const opencodeUrl = "http://localhost:4096";
-      const client = deps.createOpencodeClient(opencodeUrl);
-
+      deps.logger.info({ threadId, sessionId: dbSession.codeInterpreterId }, "Reusing existing active session");
       return {
         sessionId: dbSession.codeInterpreterId,
         volumeId: dbSession.volumeId,
-        opencodeUrl,
-        client
+        client: null as unknown as ReturnType<typeof import("../sandbox/index.js")["createOpencodeClient"]>
       };
     } else {
-      // Session is inactive, update database
-      deps.logger.info({ threadId, sessionId: dbSession.codeInterpreterId }, "Session inactive, cleaning up");
+      deps.logger.info({ threadId, sessionId: dbSession.codeInterpreterId }, "Session inactive, stopping");
       await deps.sandbox.stopSandbox(dbSession.codeInterpreterId);
     }
   }
 
-  // Create new sandbox session
   const userId = context.slack.currentMessage.author;
-  const sandbox = await deps.sandbox.createSandbox(threadId, userId);
+  const sandbox = await deps.sandbox.getOrCreateSession(threadId, userId);
 
-  // Save to database
   await deps.sessionManager.createSession(
     threadId,
     sandbox.sessionId,
     sandbox.volumeId,
     {
-      user: {
-        id: userId,
-        name: userId
-      },
-      channel: {
-        id: context.slack.channel.id,
-        name: context.slack.channel.name
-      }
+      user: { id: userId, name: userId },
+      channel: { id: context.slack.channel.id, name: context.slack.channel.name }
     }
   );
-
-  const client = deps.createOpencodeClient(sandbox.opencodeUrl);
 
   return {
     sessionId: sandbox.sessionId,
     volumeId: sandbox.volumeId,
-    opencodeUrl: sandbox.opencodeUrl,
-    client
+    client: sandbox.client
   };
 };
 
@@ -283,23 +243,17 @@ const enrichExecutionLogWithOutputs = (
   executionLog: ExecutionLogEntry[],
   responseText: string
 ): void => {
-  // Simple heuristic: look for command output patterns in the response
-  // This is a basic implementation - could be enhanced with better parsing
   for (const entry of executionLog) {
-    // Try to find output related to this command
-    // Look for sections that might be command output
     const lines = responseText.split("\n");
     let foundOutput = false;
     let outputLines: string[] = [];
 
     for (const line of lines) {
-      // If we see the command mentioned, start collecting output
       if (line.includes(entry.command.substring(0, 30))) {
         foundOutput = true;
         continue;
       }
 
-      // If we're collecting and hit a markdown separator or new section, stop
       if (foundOutput && (line.startsWith("#") || line.startsWith("---"))) {
         break;
       }
@@ -309,15 +263,12 @@ const enrichExecutionLogWithOutputs = (
       }
     }
 
-    // If we found output, use it; otherwise use a portion of the response
     if (outputLines.length > 0) {
-      entry.output = outputLines.join("\n").substring(0, 1000); // Limit output length
+      entry.output = outputLines.join("\n").substring(0, 1000);
     } else {
-      // Fallback: use relevant portion of response
       entry.output = responseText.substring(0, 500);
     }
 
-    // Check for error indicators
     entry.success = !(
       entry.output.toLowerCase().includes("error") ||
       entry.output.toLowerCase().includes("failed") ||

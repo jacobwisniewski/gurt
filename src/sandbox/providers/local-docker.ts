@@ -1,5 +1,6 @@
 import Docker from "dockerode";
 import type { SandboxProvider, SandboxSession, SandboxProviderDeps } from "../types.js";
+import { createOpencodeClient, type SandboxClient } from "../client.js";
 import { getPortForThread, getNextPort } from "../utils/port-manager.js";
 import { getConfig } from "../../config/env.js";
 
@@ -80,7 +81,6 @@ const ensureVolume = async (docker: Docker, volumeName: string): Promise<void> =
     const volume = docker.getVolume(volumeName);
     await volume.inspect();
   } catch {
-    // Volume doesn't exist, create it
     await docker.createVolume({
       Name: volumeName,
       Labels: {
@@ -92,6 +92,13 @@ const ensureVolume = async (docker: Docker, volumeName: string): Promise<void> =
 };
 
 /**
+ * Create connected opencode client
+ */
+const createClient = (port: number): SandboxClient => {
+  return createOpencodeClient(`http://localhost:${port}`);
+};
+
+/**
  * Create local Docker sandbox provider
  */
 export const createLocalDockerProvider = (deps: SandboxProviderDeps): SandboxProvider => {
@@ -99,8 +106,8 @@ export const createLocalDockerProvider = (deps: SandboxProviderDeps): SandboxPro
   const { logger } = deps;
 
   return {
-    createSandbox: async (threadId: string, userId: string): Promise<SandboxSession> => {
-      logger.info({ threadId, userId }, "Creating local Docker sandbox");
+    getOrCreateSession: async (threadId: string, userId: string): Promise<SandboxSession> => {
+      logger.info({ threadId, userId }, "Getting or creating local Docker sandbox");
 
       const containerName = getContainerName(threadId);
       const volumeName = getVolumeName(threadId);
@@ -117,25 +124,25 @@ export const createLocalDockerProvider = (deps: SandboxProviderDeps): SandboxPro
         if (containerInfo.State.Running) {
           // Container is already running, reuse it
           const port = containerInfo.HostConfig.PortBindings?.["4096/tcp"]?.[0]?.HostPort;
-          logger.info({ threadId, containerName }, "Reusing existing running container");
+          logger.info({ threadId, containerName, port }, "Reusing existing running container");
+          
           return {
             threadId,
             sessionId: containerName,
             volumeId: volumeName,
-            opencodeUrl: `http://localhost:${port}`
+            client: createClient(parseInt(port || "4096", 10))
           };
         } else {
           // Container exists but stopped, start it
           logger.info({ threadId, containerName }, "Starting existing stopped container");
           await existingContainer.start();
           
-          // Get the port from container info
           const port = containerInfo.HostConfig.PortBindings?.["4096/tcp"]?.[0]?.HostPort;
           return {
             threadId,
             sessionId: containerName,
             volumeId: volumeName,
-            opencodeUrl: `http://localhost:${port}`
+            client: createClient(parseInt(port || "4096", 10))
           };
         }
       } catch {
@@ -190,7 +197,6 @@ export const createLocalDockerProvider = (deps: SandboxProviderDeps): SandboxPro
           if (info.State.Running && info.State.Health?.Status === "healthy") {
             healthy = true;
           } else if (info.State.Running && !info.State.Health) {
-            // No health check defined, just check if running
             healthy = true;
           }
         } catch {
@@ -200,7 +206,6 @@ export const createLocalDockerProvider = (deps: SandboxProviderDeps): SandboxPro
       }
 
       if (!healthy) {
-        // Clean up on failure
         try {
           await container.stop();
           await container.remove();
@@ -216,7 +221,7 @@ export const createLocalDockerProvider = (deps: SandboxProviderDeps): SandboxPro
         threadId,
         sessionId: containerName,
         volumeId: volumeName,
-        opencodeUrl: `http://localhost:${hostPort}`
+        client: createClient(hostPort)
       };
     },
 
@@ -231,9 +236,6 @@ export const createLocalDockerProvider = (deps: SandboxProviderDeps): SandboxPro
           await container.stop({ t: 10 });
           logger.info({ sessionId }, "Container stopped");
         }
-
-        // Note: We don't remove the container or volume
-        // They persist for future reuse (like EBS volumes)
       } catch (error) {
         logger.warn({ sessionId, error }, "Failed to stop container (may not exist)");
       }

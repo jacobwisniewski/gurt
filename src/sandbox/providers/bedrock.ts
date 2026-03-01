@@ -1,12 +1,15 @@
 import { BedrockAgentCoreClient, StartCodeInterpreterSessionCommand, StopCodeInterpreterSessionCommand, GetCodeInterpreterSessionCommand } from "@aws-sdk/client-bedrock-agentcore";
 import { EC2Client, CreateVolumeCommand, DescribeVolumesCommand } from "@aws-sdk/client-ec2";
 import type { SandboxProvider, SandboxSession, SandboxProviderDeps } from "../types.js";
+import { createOpencodeClient } from "../client.js";
 import { getConfig } from "../../config/env.js";
 
 const config = getConfig();
 
 const bedrockClient = new BedrockAgentCoreClient({ region: config.AWS_REGION });
 const ec2Client = new EC2Client({ region: config.AWS_REGION });
+
+const BEDROCK_OPENCODE_URL = "http://localhost:4096";
 
 const findExistingVolume = async (threadId: string): Promise<string | undefined> => {
   const result = await ec2Client.send(new DescribeVolumesCommand({
@@ -25,8 +28,8 @@ export const createBedrockProvider = (deps: SandboxProviderDeps): SandboxProvide
   const { logger } = deps;
 
   return {
-    createSandbox: async (threadId: string, userId: string): Promise<SandboxSession> => {
-      logger.info({ threadId, userId }, "Creating Bedrock sandbox");
+    getOrCreateSession: async (threadId: string, userId: string): Promise<SandboxSession> => {
+      logger.info({ threadId, userId }, "Getting or creating Bedrock sandbox");
       
       const existingVolumeId = await findExistingVolume(threadId);
       let volumeId: string;
@@ -60,15 +63,14 @@ export const createBedrockProvider = (deps: SandboxProviderDeps): SandboxProvide
       }));
       
       const codeInterpreterId = sessionResult.codeInterpreterIdentifier!;
-      const opencodeUrl = `http://localhost:4096`;
       
-      logger.info({ threadId, codeInterpreterId, opencodeUrl }, "Bedrock session created");
+      logger.info({ threadId, codeInterpreterId }, "Bedrock session created");
       
       return {
         threadId,
         sessionId: codeInterpreterId,
         volumeId,
-        opencodeUrl
+        client: createOpencodeClient(BEDROCK_OPENCODE_URL)
       };
     },
 

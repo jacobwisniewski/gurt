@@ -7,7 +7,7 @@ import { getConfig } from "./config/env.js";
 import * as AgentController from "./core/agent-controller.js";
 import * as SessionManager from "./core/session-manager.js";
 import { createPostgresState } from "./adapters/state-postgres.js";
-import { createSandboxProvider, createOpencodeClient } from "./sandbox/index.js";
+import { createSandboxProvider } from "./sandbox/index.js";
 
 const config = getConfig();
 
@@ -48,8 +48,7 @@ const createHandleMention = (): ((thread: Parameters<typeof AgentController.hand
       getConversationHistory: (threadId, limit) =>
         SessionManager.getConversationHistory(sessionManagerDeps, threadId, limit)
     },
-    sandbox: sandboxProvider,
-    createOpencodeClient
+    sandbox: sandboxProvider
   };
 
   return (thread, message) => AgentController.handleMention(deps, thread, message);
